@@ -15,9 +15,7 @@ This command allows you to easily spin up unlimited instances of any version Mag
 8. Answer any questions that are presented. The only question that requires an answer is the first one. You must specify which version of Magento you'd like to install. You can press enter to accept the defaults for the remaining questions.
 
 To view the full instructions along with explanation, visit the official article at:
-
 https://www.magemodule.com/all-things-magento/magento2-freebies/magento2-docker-vm-script/
 
 To follow the YouTube video for this script, visit here:
-
 https://youtu.be/lf1NbmM6NEM
