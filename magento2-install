@@ -1,0 +1,557 @@
+#!/bin/bash -e
+#############################################
+MAGENTO_PUBLIC_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+MAGENTO_PRIVATE_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+#DEFAULT VALUES
+DEFAULT_SSH_KEY_PATH=~/.ssh/id_rsa
+DEFAULT_BASEPATH=~/Websites/Magento2/
+DEFAULT_EDITION=enterprise
+DEFAULT_USE_SAMPLE_DATA=y
+DEFAULT_USE_REDIS=y
+DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.1
+DEFAULT_DOCKER_DB_IMAGE=mariadb:10
+DEFAULT_DOCKER_REDIS_IMAGE=redis:latest
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_PASSWORD=abr12345
+DEFAULT_DB_USERNAME=root
+DEFAULT_DB_PASSWORD=root
+DEFAULT_DB_PORT=33067
+
+#TEXT
+RED=`tput setaf 1`
+GREEN=`tput setaf 2`
+RESET=`tput sgr0`
+BOLD=`tput bold`
+NORMAL=`tput sgr0`
+#############################################
+
+ADMIN_USERNAME=$DEFAULT_ADMIN_USERNAME
+ADMIN_PASSWORD=$DEFAULT_ADMIN_PASSWORD
+DB_USERNAME=$DEFAULT_DB_USERNAME
+DB_PASSWORD=$DEFAULT_DB_PASSWORD
+DB_PORT=$DEFAULT_DB_PORT
+
+EDITION=${EDITION:-$DEFAULT_EDITION}
+EDITION_SUFFIX=
+VERSION=
+VERSION_RAW=
+MINOR_VERSION=
+SSH_KEY_PATH=
+BASEPATH=
+DIRNAME=
+LOCATION=
+DOCKER_DOMAIN_NAME=
+USE_SAMPLE_DATA=
+DOCKER_WEB_IMAGE=
+DOCKER_DB_IMAGE=
+DOCKER_REDIS_IMAGE=
+USE_REDIS=
+
+vercomp () {
+    if [[ $1 == $2 ]]
+    then
+        return 0
+    fi
+    local IFS=.
+    local i ver1=($1) ver2=($2)
+    # fill empty fields in ver1 with zeros
+    for ((i=${#ver1[@]}; i<${#ver2[@]}; i++))
+    do
+        ver1[i]=0
+    done
+    for ((i=0; i<${#ver1[@]}; i++))
+    do
+        if [[ -z ${ver2[i]} ]]
+        then
+            # fill empty fields in ver2 with zeros
+            ver2[i]=0
+        fi
+        if ((10#${ver1[i]} > 10#${ver2[i]}))
+        then
+            return 1
+        fi
+        if ((10#${ver1[i]} < 10#${ver2[i]}))
+        then
+            return 2
+        fi
+    done
+    return 0
+}
+
+testvercomp () {
+    RESULT=0
+    vercomp $1 $2
+    case $? in
+        0) op='=';;
+        1) op='>';;
+        2) op='<';;
+    esac
+    if [[ $op != $3 ]]
+    then
+        RESULT=0
+    else
+        RESULT=1
+    fi
+
+    return $RESULT
+}
+
+setMagentoVersion() {
+    read -e -p "Which version of Magento do you want to spin up? (2.2.6, for example) " VERSION
+    VERSION_RAW=${VERSION//[^[:digit:]]/}
+}
+
+setMagentoMinorVersion() {
+IFS='.' read -ra VERSIONS <<< "$VERSION"
+COUNT=0
+for sub in "${VERSIONS[@]}"; do
+    COUNT=$(($COUNT + 1))
+    if [[ "$COUNT" == 2 ]]; then
+        MINOR_VERSION=$sub
+        break
+    fi
+done
+}
+
+setRedisEligible() {
+    if [[ "$MINOR_VERSION" -ge 2 ]]; then
+        REDIS_ELIGIBLE=1
+    else
+        REDIS_ELIGIBLE=0
+    fi
+}
+
+setDefaultDockerWebImage() {
+    if [[ "$MINOR_VERSION" -ge 3 ]]; then
+        DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.2
+    elif [[ "$MINOR_VERSION" -ge 2 ]]; then
+        DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.1
+    else
+        DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.0
+    fi
+}
+
+setMagentoEdition() {
+    while true; do
+    read -e -p "Which edition, community or enterprise? [$DEFAULT_EDITION] " EDITION
+    case $EDITION in
+        community)
+          break
+          ;;
+        ce)
+          EDITION=community
+          break
+          ;;
+        enterprise)
+          break
+          ;;
+        ee)
+          EDITION=enterprise
+          break
+          ;;
+        "")
+          EDITION=$DEFAULT_EDITION
+          break
+          ;;
+        *)
+          echo "${RED}${BOLD}Edition can only be community, ce, enterprise, or ee${NORMAL}${RESET}"
+        esac
+    done
+}
+
+setMagentoEditionSuffix() {
+    case $EDITION in
+        community)
+            EDITION_SUFFIX=ce
+            ;;
+        enterprise)
+            EDITION_SUFFIX=ee
+            ;;
+    esac
+}
+
+setSshKey() {
+    while true; do
+      read -e -p "What is the path to your private SSH key? [$DEFAULT_SSH_KEY_PATH] " SSH_KEY_PATH
+      SSH_KEY_PATH=${SSH_KEY_PATH:-$DEFAULT_SSH_KEY_PATH}
+
+      if [ -f "$SSH_KEY_PATH" ]; then
+        break
+      fi
+
+      if [ ! -f "$SSH_KEY_PATH" ]; then
+        echo "${RED}${BOLD}$SSH_KEY_PATH does not exist, please try again${NORMAL}${RESET}"
+      fi
+    done
+}
+
+setSshFilename() {
+    SSH_FILENAME=$(basename $SSH_KEY_PATH)
+}
+
+setProjectParentDirectory() {
+    read -e -p "In which directory should we create the project? [$DEFAULT_BASEPATH] " BASEPATH
+    BASEPATH=${BASEPATH:-$DEFAULT_BASEPATH}
+}
+
+setProjectDirectoryName() {
+    DEFAULT_DIRNAME=magento$VERSION_RAW$EDITION_SUFFIX
+    while true; do
+      read -e -p "Which directory name should we use for the project? [magento$VERSION_RAW$EDITION_SUFFIX] " DIRNAME
+      DIRNAME=${DIRNAME:-$DEFAULT_DIRNAME}
+      LOCATION=$BASEPATH$DIRNAME
+
+      if [ ! -d "$LOCATION" ]; then
+        break
+      fi
+
+      if [ -d "$LOCATION" ]; then
+        echo "${RED}${BOLD}$LOCATION already exists, please choose another directory name${NORMAL}${RESET}"
+      fi
+    done
+}
+
+setDomainName() {
+    DEFAULT_DOCKER_DOMAIN_NAME=local.$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g").com
+    read -e -p "What domain name should we use? [$DEFAULT_DOCKER_DOMAIN_NAME] " DOCKER_DOMAIN_NAME
+    DOCKER_DOMAIN_NAME=${DOCKER_DOMAIN_NAME:-$DEFAULT_DOCKER_DOMAIN_NAME}
+}
+
+setUseSampleData() {
+    while true; do
+      read -e -p "Install sample data? [$DEFAULT_USE_SAMPLE_DATA] " USE_SAMPLE_DATA
+      USE_SAMPLE_DATA=${USE_SAMPLE_DATA:-$DEFAULT_USE_SAMPLE_DATA}
+      case $USE_SAMPLE_DATA in
+          y)
+              USE_SAMPLE_DATA=1
+              break
+              ;;
+          1)
+              break
+              ;;
+          n)
+              USE_SAMPLE_DATA=0
+              break
+              ;;
+          0)
+              break
+              ;;
+          "")
+              USE_SAMPLE_DATA=$DEFAULT_USE_SAMPLE_DATA
+              break
+              ;;
+          *)
+              echo "${RED}${BOLD}Valid values are y or n${NORMAL}${RESET}"
+      esac
+    done
+}
+
+setDockerWebImage() {
+    read -e -p "Which Docker web image? [$DEFAULT_DOCKER_WEB_IMAGE] " DOCKER_WEB_IMAGE
+    DOCKER_WEB_IMAGE=${DOCKER_WEB_IMAGE:-$DEFAULT_DOCKER_WEB_IMAGE}
+}
+
+setDockerDbImage() {
+    read -e -p "Which Docker database image? [$DEFAULT_DOCKER_DB_IMAGE] " DOCKER_DB_IMAGE
+    DOCKER_DB_IMAGE=${DOCKER_DB_IMAGE:-$DEFAULT_DOCKER_DB_IMAGE}
+}
+
+setUseRedis() {
+    if [ "$REDIS_ELIGIBLE" == 1 ]; then
+      while true; do
+        read -e -p "Use Redis for caching and session storage? [$DEFAULT_USE_REDIS] " USE_REDIS
+        USE_REDIS=${USE_REDIS:-$DEFAULT_USE_REDIS}
+        case $USE_REDIS in
+            y)
+                USE_REDIS=1
+                break
+                ;;
+            1)
+                break
+                ;;
+            n)
+                USE_REDIS=0
+                break
+                ;;
+            0)
+                break
+                ;;
+            "")
+                USE_REDIS=$DEFAULT_USE_REDIS
+                break
+                ;;
+            *)
+                echo "${RED}${BOLD}Valid values are y or n${NORMAL}${RESET}"
+        esac
+      done
+    else
+      USE_REDIS=0
+    fi
+}
+
+setDockerRedisImage() {
+    if [[ "$USE_REDIS" == 1 ]]; then
+        read -e -p "Which Docker Redis image? [$DEFAULT_DOCKER_REDIS_IMAGE] " DOCKER_REDIS_IMAGE
+        DOCKER_REDIS_IMAGE=${DOCKER_REDIS_IMAGE:-$DEFAULT_DOCKER_REDIS_IMAGE}
+    fi
+}
+
+addDomainNameToHostsFile() {
+    echo "${RED}${BOLD}Please enter sudo password so that an entry can be made to the /etc/hosts file${NORMAL}${RESET}"
+    if ! grep -q ${DOCKER_DOMAIN_NAME} /etc/hosts; then
+      sudo -- sh -c "echo '127.0.0.1 ${DOCKER_DOMAIN_NAME}' >> /etc/hosts"
+    fi
+
+    sudo ifconfig lo0 alias 10.200.10.1/24
+}
+
+downloadMagentoFiles() {
+    mkdir -p $LOCATION
+    chown -R ${USER}:${GROUP} $LOCATION
+    composer create-project --ignore-platform-reqs --repository=https://repo.magento.com/ magento/project-$EDITION-edition:$VERSION $LOCATION
+    find $LOCATION -name '.htaccess' -exec sed -i '' s/756M/2048M/g {} + && \
+    find $LOCATION -name '.htaccess' -exec sed -i '' s/768M/2048M/g {} + && \
+    find $LOCATION -name '.user.ini' -exec sed -i '' s/756M/2048M/g {} + && \
+    find $LOCATION -name '.user.ini' -exec sed -i '' s/768M/2048M/g {} +
+}
+
+createAuthJson() {
+    echo "{\"http-basic\": {\"repo.magento.com\": {\"username\": \"$MAGENTO_PUBLIC_KEY\",\"password\": \"$MAGENTO_PRIVATE_KEY\"}}}" > $LOCATION/auth.json
+}
+
+createDockerComposeFile() {
+DOCKER_COMPOSE_FILE=$LOCATION/docker-compose.yml
+if [[ -f "$DOCKER_COMPOSE_FILE" ]]; then
+    rm $DOCKER_COMPOSE_FILE
+fi
+
+touch $DOCKER_COMPOSE_FILE
+
+DOCKER_SERVICE_PREFIX=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
+DOCKER_WEB_SERVICE_NAME=${DOCKER_SERVICE_PREFIX}_web
+DOCKER_DB_SERVICE_NAME=${DOCKER_SERVICE_PREFIX}_mysql
+DOCKER_REDIS_SERVICE_NAME=${DOCKER_SERVICE_PREFIX}_redis
+
+DOCKER_CONTAINER_PREFIX=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
+DOCKER_WEB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_web
+DOCKER_DB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_mysql
+DOCKER_REDIS_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_redis
+
+DOCKER_DB_NAME=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
+
+cat <<EOT >> $DOCKER_COMPOSE_FILE
+version: '3'
+services:
+    ${DOCKER_WEB_SERVICE_NAME}:
+        image: ${DOCKER_WEB_IMAGE}
+        container_name: ${DOCKER_WEB_CONTAINER_NAME}
+        user: application
+        working_dir: /app
+        restart: always
+        volumes:
+          - "${LOCATION}:/app:cached"
+          - "root-ssh-files:/root/.ssh/"
+          - "user-ssh-files:/home/application/.ssh/"
+        environment:
+          - WEB_ALIAS_DOMAIN=${DOCKER_DOMAIN_NAME}
+          - WEB_DOCUMENT_ROOT=/app/pub
+          - PHP_DATE_TIMEZONE=EST
+          - PHP_DISPLAY_ERRORS=1
+          - PHP_MEMORY_LIMIT=2048M
+          - PHP_MAX_EXECUTION_TIME=300
+          - PHP_POST_MAX_SIZE=500M
+          - PHP_UPLOAD_MAX_FILESIZE=1024M
+          - PHP_DEBUGGER=xdebug
+          - XDEBUG_REMOTE_CONNECT_BACK=0
+          - XDEBUG_REMOTE_HOST=192.168.1.32
+          - XDEBUG_REMOTE_PORT=9000
+          - php.xdebug.remote_enable=1
+          - php.xdebug.idekey=PHPSTORM
+        ports:
+          - "443:443"
+          - "32834:22"
+        links:
+          - ${DOCKER_DB_SERVICE_NAME}:mysql
+EOT
+
+if [[ "$USE_REDIS" == 1 ]]; then
+cat <<EOT >> $DOCKER_COMPOSE_FILE
+          - ${DOCKER_REDIS_SERVICE_NAME}:redis
+EOT
+fi
+
+cat <<EOT >> $DOCKER_COMPOSE_FILE
+    ${DOCKER_DB_SERVICE_NAME}:
+        image: ${DOCKER_DB_IMAGE}
+        container_name: ${DOCKER_DB_CONTAINER_NAME}
+        restart: always
+        volumes:
+          - db-data:/var/lib/mysql
+        environment:
+          - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
+          - MYSQL_DATABASE=${DOCKER_DB_NAME}
+        ports:
+          - "${DB_PORT}:3306"
+EOT
+
+if [[ "$USE_REDIS" == 1 ]]; then
+cat <<EOT >> $DOCKER_COMPOSE_FILE
+    ${DOCKER_REDIS_SERVICE_NAME}:
+        image: ${DOCKER_REDIS_IMAGE}
+        container_name: ${DOCKER_REDIS_CONTAINER_NAME}
+        restart: always
+        ports:
+          - "6379:6379"
+        volumes:
+          - redis-data:/data
+EOT
+fi
+
+cat <<EOT >> $DOCKER_COMPOSE_FILE
+volumes:
+    db-data:
+        external: false
+    root-ssh-files:
+        external: false
+    user-ssh-files:
+        external: false
+EOT
+
+if [[ "$USE_REDIS" == 1 ]]; then
+cat <<EOT >> $DOCKER_COMPOSE_FILE
+    redis-data:
+        external: false
+EOT
+fi
+}
+
+createDockerContainers() {
+    docker-compose -f $DOCKER_COMPOSE_FILE up -d --build
+    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "mkdir -p ~/.ssh"
+    docker cp ${SSH_KEY_PATH} ${DOCKER_WEB_CONTAINER_NAME}:/root/.ssh/$SSH_FILENAME
+    docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/root/.ssh/${SSH_FILENAME}.pub
+    docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/root/.ssh/authorized_keys
+    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "chmod 600 ~/.ssh/authorized_keys"
+
+    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "mkdir -p /home/application/.ssh/"
+    docker cp ${SSH_KEY_PATH} ${DOCKER_WEB_CONTAINER_NAME}:/home/application/.ssh/$SSH_FILENAME
+    docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/home/application/.ssh/${SSH_FILENAME}.pub
+    docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/home/application/.ssh/authorized_keys
+    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "chmod 600 /home/application/.ssh/authorized_keys"
+    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "chown -R application:application /home/application/.ssh/"
+
+    if [[ "$USE_SAMPLE_DATA" == 1 ]]; then
+    docker exec $DOCKER_WEB_SERVICE_NAME /bin/bash -c "php /app/bin/magento sampledata:deploy"
+    fi
+}
+
+installMagento() {
+    MAGENTO_INSTALL_COMMAND="php /app/bin/magento setup:install \
+    --admin-firstname=John \
+    --admin-lastname=Doe \
+    --admin-email=admin@example.com \
+    --admin-user=$ADMIN_USERNAME \
+    --admin-password=$ADMIN_PASSWORD \
+    --base-url=https://$DOCKER_DOMAIN_NAME \
+    --base-url-secure=https://$DOCKER_DOMAIN_NAME \
+    --backend-frontname=admin \
+    --db-host=mysql \
+    --db-name=$DOCKER_DB_NAME \
+    --db-user=$DB_USERNAME \
+    --db-password=$DB_PASSWORD \
+    --use-rewrites=1 \
+    --language=en_US \
+    --currency=USD \
+    --timezone=America/New_York \
+    --use-secure-admin=1 \
+    --admin-use-security-key=1"
+
+    if [[ "$USE_REDIS" == 1 ]]; then
+        MAGENTO_INSTALL_COMMAND=" ${MAGENTO_INSTALL_COMMAND} --session-save=redis \
+        --session-save-redis-host=redis \
+        --session-save-redis-port=6379 \
+        --session-save-redis-db=2 \
+        --cache-backend-redis-server=redis \
+        --cache-backend-redis-db=0 \
+        --cache-backend-redis-port=6379 \
+        --page-cache-redis-server=redis \
+        --page-cache-redis-db=1 \
+        --page-cache-redis-port=6379 \
+        --page-cache-redis-compress-data=0"
+    fi
+
+    if [[ "$USE_REDIS" == 0 ]]; then
+        MAGENTO_INSTALL_COMMAND=" ${MAGENTO_INSTALL_COMMAND} --session-save='files'"
+    fi
+
+    if [[ "$USE_SAMPLE_DATA" == 1 ]]; then
+        MAGENTO_INSTALL_COMMAND=" ${MAGENTO_INSTALL_COMMAND} --use-sample-data"
+    fi
+
+    docker exec $DOCKER_WEB_SERVICE_NAME /bin/bash -c "$MAGENTO_INSTALL_COMMAND"
+    docker exec $DOCKER_WEB_SERVICE_NAME /bin/bash -c "php /app/bin/magento deploy:mode:set developer"
+}
+
+handleSuccess() {
+printf "\n"
+printf "${GREEN}${BOLD}SUCCESS!!!${NORMAL}${RESET} \n"
+printf "\n"
+printf "${GREEN}${BOLD}Website${NORMAL}${RESET} \n"
+printf "${BOLD}Frontend:${NORMAL} https://$DOCKER_DOMAIN_NAME \n"
+printf "${BOLD}Admin:${NORMAL} https://$DOCKER_DOMAIN_NAME/admin/ \n"
+printf "${BOLD}Username:${NORMAL} $ADMIN_USERNAME \n"
+printf "${BOLD}Password:${NORMAL} $ADMIN_PASSWORD \n"
+printf "\n"
+printf "${GREEN}${BOLD}Database${NORMAL}${RESET} \n"
+printf "${BOLD}Host:${NORMAL} 127.0.0.1 \n"
+printf "${BOLD}Port:${NORMAL} $DB_PORT \n"
+printf "${BOLD}Username:${NORMAL} $DB_USERNAME \n"
+printf "${BOLD}Password:${NORMAL} $DB_PASSWORD \n"
+printf "\n"
+printf "${GREEN}${BOLD}Xdebug${NORMAL}${RESET} \n"
+printf "${BOLD}Port:${NORMAL} 9000 \n"
+printf "${BOLD}IDE Key:${NORMAL} MAGENTO \n"
+printf "\n"
+printf "In order to allow Xdebug to route back to the host machine, we created a loopback network by running this command: ${BOLD}ifconfig lo0 alias 10.200.10.1/24${NORMAL} \n"
+printf "If you restart your computer, you will need to run that command again for Xdebug to work. It is most convenient to create an alias in your ~/.bash_profile so that you can simply type a command to run it again."
+printf "\n"
+printf "\n"
+printf "${RED}${BOLD}This environment configuration is only intended for use in development. It is not secure enough for production use.${NORMAL}${RESET}"
+printf "\n"
+exit
+}
+
+handleError() {
+printf "\n"
+printf "${RED}${BOLD}An error has occurred. Removing newly installed files and/or Docker containers...${NORMAL}${RESET} \n"
+printf "\n"
+docker-compose -f $DOCKER_COMPOSE_FILE down
+docker volume rm $(docker volume ls -q|grep ${DIRNAME}_)
+rm -R $LOCATION
+exit
+}
+
+setMagentoVersion
+setMagentoMinorVersion
+setRedisEligible
+setDefaultDockerWebImage
+setMagentoEdition
+setMagentoEditionSuffix
+setSshKey
+setSshFilename
+setProjectParentDirectory
+setProjectDirectoryName
+setDomainName
+setUseSampleData
+setDockerWebImage
+setDockerDbImage
+setUseRedis
+setDockerRedisImage
+addDomainNameToHostsFile
+downloadMagentoFiles || handleError
+createAuthJson
+createDockerComposeFile
+createDockerContainers || handleError
+installMagento || handleError
+handleSuccess
