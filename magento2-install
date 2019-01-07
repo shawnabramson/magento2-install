@@ -1,7 +1,7 @@
 #!/bin/bash -e
 #############################################
-MAGENTO_PUBLIC_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-MAGENTO_PRIVATE_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+MAGENTO_PUBLIC_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+MAGENTO_PRIVATE_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
 #DEFAULT VALUES
 DEFAULT_SSH_KEY_PATH=~/.ssh/id_rsa
@@ -347,7 +347,6 @@ services:
         image: ${DOCKER_WEB_IMAGE}
         container_name: ${DOCKER_WEB_CONTAINER_NAME}
         user: application
-        working_dir: /app
         restart: always
         volumes:
           - "${LOCATION}:/app:cached"
