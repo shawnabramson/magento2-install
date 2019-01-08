@@ -13,7 +13,7 @@ DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.1
 DEFAULT_DOCKER_DB_IMAGE=mariadb:10
 DEFAULT_DOCKER_REDIS_IMAGE=redis:latest
 DEFAULT_ADMIN_USERNAME=admin
-DEFAULT_ADMIN_PASSWORD=abr12345
+DEFAULT_ADMIN_PASSWORD=abc12345
 DEFAULT_DB_USERNAME=root
 DEFAULT_DB_PASSWORD=root
 DEFAULT_DB_PORT=33067
@@ -525,8 +525,7 @@ handleError() {
 printf "\n"
 printf "${RED}${BOLD}An error has occurred. Removing newly installed files and/or Docker containers...${NORMAL}${RESET} \n"
 printf "\n"
-docker-compose -f $DOCKER_COMPOSE_FILE down
-docker volume rm $(docker volume ls -q|grep ${DIRNAME}_)
+docker-compose -f $DOCKER_COMPOSE_FILE down --volumes
 rm -R $LOCATION
 exit
 }
