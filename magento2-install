@@ -383,6 +383,10 @@ fi
 cat <<EOT >> $DOCKER_COMPOSE_FILE
     ${DOCKER_DB_SERVICE_NAME}:
         image: ${DOCKER_DB_IMAGE}
+        command: [
+            '--wait_timeout=28800',
+            '--max_allowed_packet=32505856'
+        ]
         container_name: ${DOCKER_DB_CONTAINER_NAME}
         restart: always
         volumes:
