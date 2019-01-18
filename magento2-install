@@ -329,9 +329,9 @@ fi
 touch $DOCKER_COMPOSE_FILE
 
 DOCKER_SERVICE_PREFIX=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
-DOCKER_WEB_SERVICE_NAME=${DOCKER_SERVICE_PREFIX}_web
-DOCKER_DB_SERVICE_NAME=${DOCKER_SERVICE_PREFIX}_mysql
-DOCKER_REDIS_SERVICE_NAME=${DOCKER_SERVICE_PREFIX}_redis
+DOCKER_WEB_SERVICE_NAME=web
+DOCKER_DB_SERVICE_NAME=mysql
+DOCKER_REDIS_SERVICE_NAME=redis
 
 DOCKER_CONTAINER_PREFIX=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
 DOCKER_WEB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_web
@@ -383,10 +383,6 @@ fi
 cat <<EOT >> $DOCKER_COMPOSE_FILE
     ${DOCKER_DB_SERVICE_NAME}:
         image: ${DOCKER_DB_IMAGE}
-        command: [
-            '--wait_timeout=28800',
-            '--max_allowed_packet=32505856'
-        ]
         container_name: ${DOCKER_DB_CONTAINER_NAME}
         restart: always
         volumes:
@@ -396,6 +392,10 @@ cat <<EOT >> $DOCKER_COMPOSE_FILE
           - MYSQL_DATABASE=${DOCKER_DB_NAME}
         ports:
           - "${DB_PORT}:3306"
+        command: [
+            '--wait_timeout=28800',
+            '--max_allowed_packet=32505856'
+        ]
 EOT
 
 if [[ "$USE_REDIS" == 1 ]]; then
@@ -431,21 +431,23 @@ fi
 
 createDockerContainers() {
     docker-compose -f $DOCKER_COMPOSE_FILE up -d --build
-    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "mkdir -p ~/.ssh"
+    docker exec -uroot $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "mkdir -p ~/.ssh"
     docker cp ${SSH_KEY_PATH} ${DOCKER_WEB_CONTAINER_NAME}:/root/.ssh/$SSH_FILENAME
     docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/root/.ssh/${SSH_FILENAME}.pub
     docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/root/.ssh/authorized_keys
-    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "chmod 600 ~/.ssh/authorized_keys"
+    docker exec -uroot $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "chmod 600 ~/.ssh/authorized_keys"
 
-    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "mkdir -p /home/application/.ssh/"
+    docker exec -uroot $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "mkdir -p /home/application/.ssh/"
     docker cp ${SSH_KEY_PATH} ${DOCKER_WEB_CONTAINER_NAME}:/home/application/.ssh/$SSH_FILENAME
     docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/home/application/.ssh/${SSH_FILENAME}.pub
     docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/home/application/.ssh/authorized_keys
-    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "chmod 600 /home/application/.ssh/authorized_keys"
-    docker exec -uroot $DOCKER_WEB_SERVICE_NAME /bin/bash -c "chown -R application:application /home/application/.ssh/"
+    docker exec -uroot $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "chmod 600 /home/application/.ssh/authorized_keys"
+    docker exec -uroot $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "chown -R application:application /home/application/.ssh/"
+
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "cd /app && composer update"
 
     if [[ "$USE_SAMPLE_DATA" == 1 ]]; then
-    docker exec $DOCKER_WEB_SERVICE_NAME /bin/bash -c "php /app/bin/magento sampledata:deploy"
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento sampledata:deploy"
     fi
 }
 
@@ -492,8 +494,8 @@ installMagento() {
         MAGENTO_INSTALL_COMMAND=" ${MAGENTO_INSTALL_COMMAND} --use-sample-data"
     fi
 
-    docker exec $DOCKER_WEB_SERVICE_NAME /bin/bash -c "$MAGENTO_INSTALL_COMMAND"
-    docker exec $DOCKER_WEB_SERVICE_NAME /bin/bash -c "php /app/bin/magento deploy:mode:set developer"
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "$MAGENTO_INSTALL_COMMAND"
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento deploy:mode:set developer"
 }
 
 handleSuccess() {
