@@ -303,17 +303,17 @@ addDomainNameToHostsFile() {
       sudo -- sh -c "echo '127.0.0.1 ${DOCKER_DOMAIN_NAME}' >> /etc/hosts"
     fi
 
-    sudo ifconfig lo0 alias 10.200.10.1/24
+    sudo ip addr add 10.200.10.1 dev lo label lo:0
 }
 
 downloadMagentoFiles() {
     mkdir -p $LOCATION
     chown -R ${USER}:${GROUP} $LOCATION
     composer create-project --ignore-platform-reqs --repository=https://repo.magento.com/ magento/project-$EDITION-edition:$VERSION $LOCATION
-    find $LOCATION -name '.htaccess' -exec sed -i '' s/756M/2048M/g {} + && \
-    find $LOCATION -name '.htaccess' -exec sed -i '' s/768M/2048M/g {} + && \
-    find $LOCATION -name '.user.ini' -exec sed -i '' s/756M/2048M/g {} + && \
-    find $LOCATION -name '.user.ini' -exec sed -i '' s/768M/2048M/g {} +
+    find "$LOCATION" -name '.htaccess' -exec sed -i "s/756M/2048M/g" {} + && \
+    find "$LOCATION" -name '.htaccess' -exec sed -i "s/768M/2048M/g" {} + && \
+    find "$LOCATION" -name '.user.ini' -exec sed -i "s/756M/2048M/g" {} + && \
+    find "$LOCATION" -name '.user.ini' -exec sed -i "s/768M/2048M/g" {} +
 }
 
 createAuthJson() {
