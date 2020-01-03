@@ -320,6 +320,18 @@ createAuthJson() {
     echo "{\"http-basic\": {\"repo.magento.com\": {\"username\": \"$MAGENTO_PUBLIC_KEY\",\"password\": \"$MAGENTO_PRIVATE_KEY\"}}}" > $LOCATION/auth.json
 }
 
+createDockerfile() {
+mkdir -p $LOCATION
+DOCKERFILE=$LOCATION/Dockerfile
+touch $DOCKERFILE
+cat <<EOT >> $DOCKERFILE
+FROM ${DOCKER_WEB_IMAGE}
+RUN echo "deb http://deb.debian.org/debian stretch-backports main" >> /etc/apt/sources.list
+RUN apt-get update && apt-get -t stretch-backports install -y libsodium-dev
+RUN docker-php-ext-install sodium
+EOT
+}
+
 createDockerComposeFile() {
 DOCKER_COMPOSE_FILE=$LOCATION/docker-compose.yml
 if [[ -f "$DOCKER_COMPOSE_FILE" ]]; then
@@ -332,11 +344,13 @@ DOCKER_SERVICE_PREFIX=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
 DOCKER_WEB_SERVICE_NAME=web
 DOCKER_DB_SERVICE_NAME=mysql
 DOCKER_REDIS_SERVICE_NAME=redis
+DOCKER_ELASTICSEARCH_SERVICE_NAME=elasticsearch
 
 DOCKER_CONTAINER_PREFIX=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
 DOCKER_WEB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_web
 DOCKER_DB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_mysql
 DOCKER_REDIS_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_redis
+DOCKER_ELASTICSEARCH_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_elasticsearch
 
 DOCKER_DB_NAME=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
 
@@ -344,12 +358,24 @@ cat <<EOT >> $DOCKER_COMPOSE_FILE
 version: '3'
 services:
     ${DOCKER_WEB_SERVICE_NAME}:
+EOT
+
+if [[ "$MINOR_VERSION" -ge 3 ]]; then
+cat <<EOT >> $DOCKER_COMPOSE_FILE
+        build: .
+EOT
+else
+cat <<EOT >> $DOCKER_COMPOSE_FILE
         image: ${DOCKER_WEB_IMAGE}
+EOT
+fi
+
+cat <<EOT >> $DOCKER_COMPOSE_FILE
         container_name: ${DOCKER_WEB_CONTAINER_NAME}
         user: application
         restart: always
         volumes:
-          - "${LOCATION}:/app:cached"
+          - "${LOCATION}:/app:delegated"
           - "root-ssh-files:/root/.ssh/"
           - "user-ssh-files:/home/application/.ssh/"
         environment:
@@ -363,15 +389,17 @@ services:
           - PHP_UPLOAD_MAX_FILESIZE=1024M
           - PHP_DEBUGGER=xdebug
           - XDEBUG_REMOTE_CONNECT_BACK=0
-          - XDEBUG_REMOTE_HOST=192.168.1.32
+          - XDEBUG_REMOTE_HOST=host.docker.internal
           - XDEBUG_REMOTE_PORT=9000
           - php.xdebug.remote_enable=1
           - php.xdebug.idekey=PHPSTORM
+          - PHP_DISMOD=ioncube
         ports:
           - "443:443"
           - "32834:22"
         links:
           - ${DOCKER_DB_SERVICE_NAME}:mysql
+          - ${DOCKER_ELASTICSEARCH_SERVICE_NAME}:elasticsearch
 EOT
 
 if [[ "$USE_REDIS" == 1 ]]; then
@@ -412,12 +440,36 @@ EOT
 fi
 
 cat <<EOT >> $DOCKER_COMPOSE_FILE
+    ${DOCKER_ELASTICSEARCH_SERVICE_NAME}:
+        image: docker.elastic.co/elasticsearch/elasticsearch:5.2.2
+        container_name: ${DOCKER_ELASTICSEARCH_CONTAINER_NAME}
+        environment:
+            - cluster.name=docker-cluster
+            - bootstrap.memory_lock=true
+            - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+            - "xpack.security.enabled=false"
+        ulimits:
+            memlock:
+                soft: -1
+                hard: -1
+            nofile:
+                soft: 65536
+                hard: 65536
+        cap_add:
+            - IPC_LOCK
+        volumes:
+            - elasticsearch-data:/usr/share/elasticsearch/data
+        ports:
+            - 9200:9200
+
 volumes:
     db-data:
         external: false
     root-ssh-files:
         external: false
     user-ssh-files:
+        external: false
+    elasticsearch-data:
         external: false
 EOT
 
@@ -555,6 +607,9 @@ setDockerRedisImage
 addDomainNameToHostsFile
 downloadMagentoFiles || handleError
 createAuthJson
+if [[ "$MINOR_VERSION" -ge 3 ]]; then
+  createDockerfile
+fi
 createDockerComposeFile
 createDockerContainers || handleError
 installMagento || handleError
