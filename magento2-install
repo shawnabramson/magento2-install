@@ -326,9 +326,6 @@ DOCKERFILE=$LOCATION/Dockerfile
 touch $DOCKERFILE
 cat <<EOT >> $DOCKERFILE
 FROM ${DOCKER_WEB_IMAGE}
-RUN echo "deb http://deb.debian.org/debian stretch-backports main" >> /etc/apt/sources.list
-RUN apt-get update && apt-get -t stretch-backports install -y libsodium-dev
-RUN docker-php-ext-install sodium
 EOT
 }
 
