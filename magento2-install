@@ -842,7 +842,7 @@ handleSuccess() {
     printf "${BOLD}SSH into web container as root: ${NORMAL}docker exec -uroot -it $DOCKER_WEB_CONTAINER_NAME bash\n"
     printf "${BOLD}Issue command to web container: ${NORMAL}docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c \"ls -altr\"\n"
     if [[ $USE_REDIS == 1 ]]; then
-        printf "${BOLD}Flush Redis: ${NORMAL}docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c \"ls -altr\"\n"
+        printf "${BOLD}Flush Redis: ${NORMAL}docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c \"redis-cli flushall\"\n"
     fi
     printf "\n"
     printf "${GREEN}${BOLD}Helpful Hint: ${NORMAL}If you don't need/want xDebug, you can change the web image to a faster, more performant version of the same Docker image. To do so: \n"
@@ -854,7 +854,7 @@ handleSuccess() {
     printf " 6. You should notice that the VM runs considerably faster\n"
     printf "\n"
     printf "${BOLD}This environment configuration is only intended for use in development. It is not secure enough for production use.${NORMAL}${RESET}"
-    printf "\n"
+    printf "\n\n"
 }
 
 handleError() {
