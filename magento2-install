@@ -782,6 +782,11 @@ installMagento() {
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento deploy:mode:set developer"
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento cache:disable full_page block_html"
 
+    if [ "$(versionCompare $VERSION \>= 2.4.0)" == 1 ]; then
+      docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento module:disable Magento_TwoFactorAuth"
+      docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento cache:flush"
+    fi
+
     if [ $USE_ELASTICSEARCH == 1 ] && [ "$(versionCompare $VERSION \>= 2.2.0)" == 1 ]; then
         docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento config:set --lock-env catalog/search/engine ${MAGENTO_SEARCH_ENGINE_CONFIG_VALUE}"
         docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento app:config:import"
