@@ -1,373 +1,555 @@
 #!/bin/bash -e
-#############################################
-MAGENTO_PUBLIC_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-MAGENTO_PRIVATE_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+trap "exit 1" TERM
+export TOP_PID=$$
+
+#TEXT
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+RESET=$(tput sgr0)
+BOLD=$(tput bold)
+NORMAL=$(tput sgr0)
+CHECKMARK="${GREEN}\xE2\x9C\x94${NORMAL} "
+ERROR="${RED}\xe2\x9c\x98${NORMAL} "
 
 #DEFAULT VALUES
 DEFAULT_SSH_KEY_PATH=~/.ssh/id_rsa
-DEFAULT_BASEPATH=~/Websites/Magento2/
-DEFAULT_EDITION=enterprise
+DEFAULT_BASEPATH=$(pwd)
+DEFAULT_EDITION=ce
 DEFAULT_USE_SAMPLE_DATA=y
-DEFAULT_USE_REDIS=y
-DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.1
+DEFAULT_DOCKER_PRODUCTION_WEB_IMAGE=webdevops/php-apache
+DEFAULT_DOCKER_DEVELOPMENT_WEB_IMAGE=${DEFAULT_DOCKER_PRODUCTION_WEB_IMAGE}-dev
 DEFAULT_DOCKER_DB_IMAGE=mariadb:10
 DEFAULT_DOCKER_REDIS_IMAGE=redis:latest
 DEFAULT_ADMIN_USERNAME=admin
 DEFAULT_ADMIN_PASSWORD=abc12345
 DEFAULT_DB_USERNAME=root
 DEFAULT_DB_PASSWORD=root
-DEFAULT_DB_PORT=33067
-
-#TEXT
-RED=`tput setaf 1`
-GREEN=`tput setaf 2`
-RESET=`tput sgr0`
-BOLD=`tput bold`
-NORMAL=`tput sgr0`
-#############################################
+DEFAULT_DB_PORT=3306
+DEFAULT_WEB_PORT=443
+DEFAULT_ELASTICSEARCH_PORT=9200
+DEFAULT_REDIS_PORT=6379
+DEFAULT_HANDLE_ERROR=N
+DEFAULT_IDE_KEY=PHPSTORM
 
 ADMIN_USERNAME=$DEFAULT_ADMIN_USERNAME
 ADMIN_PASSWORD=$DEFAULT_ADMIN_PASSWORD
 DB_USERNAME=$DEFAULT_DB_USERNAME
 DB_PASSWORD=$DEFAULT_DB_PASSWORD
-DB_PORT=$DEFAULT_DB_PORT
+WEB_PORT=$DEFAULT_WEB_PORT
 
-EDITION=${EDITION:-$DEFAULT_EDITION}
-EDITION_SUFFIX=
-VERSION=
-VERSION_RAW=
-MINOR_VERSION=
-SSH_KEY_PATH=
-BASEPATH=
-DIRNAME=
-LOCATION=
-DOCKER_DOMAIN_NAME=
-USE_SAMPLE_DATA=
-DOCKER_WEB_IMAGE=
-DOCKER_DB_IMAGE=
-DOCKER_REDIS_IMAGE=
-USE_REDIS=
+DOCKER_DB_IMAGE=$DEFAULT_DOCKER_DB_IMAGE
+DOCKER_REDIS_IMAGE=$DEFAULT_DOCKER_REDIS_IMAGE
 
-vercomp () {
-    if [[ $1 == $2 ]]
-    then
-        return 0
-    fi
-    local IFS=.
-    local i ver1=($1) ver2=($2)
-    # fill empty fields in ver1 with zeros
-    for ((i=${#ver1[@]}; i<${#ver2[@]}; i++))
-    do
-        ver1[i]=0
-    done
-    for ((i=0; i<${#ver1[@]}; i++))
-    do
-        if [[ -z ${ver2[i]} ]]
-        then
-            # fill empty fields in ver2 with zeros
-            ver2[i]=0
-        fi
-        if ((10#${ver1[i]} > 10#${ver2[i]}))
-        then
-            return 1
-        fi
-        if ((10#${ver1[i]} < 10#${ver2[i]}))
-        then
-            return 2
-        fi
-    done
-    return 0
+displayAttribution() {
+    printf "${GREEN}${BOLD}Script Name:${NORMAL} Magento 2 + Docker Installation Script\n"
+    printf "${GREEN}${BOLD}Author:${NORMAL} Shawn Abramson\n"
+    printf "${GREEN}${BOLD}Organization:${NORMAL} MageModule, LLC\n"
+    printf "${GREEN}${BOLD}Website:${NORMAL} https://www.magemodule.com\n"
+    printf "${GREEN}${BOLD}Email:${NORMAL} shawn@magemodule.com\n"
+    printf "${GREEN}${BOLD}LinkedIn:${NORMAL} https://www.linkedin.com/in/shawn-abramson-7194585b/\n"
+    printf "${GREEN}${BOLD}Attribution:${NORMAL} This script is provided free of charge to all who would like to use it. If you share it, you must share the link to the Github repository: https://github.com/shawnabramson/magento2-install\n"
 }
 
-testvercomp () {
-    RESULT=0
-    vercomp $1 $2
-    case $? in
-        0) op='=';;
-        1) op='>';;
-        2) op='<';;
+validateInteger() {
+    re='^[0-9]+$'
+    if ! [[ $1 =~ $re ]] ;
+        then echo 0
+        else echo 1
+    fi
+}
+
+versionCompare() {
+    local subject=$1
+    local operator=$2
+    local target=$3
+
+    local pattern='^([0-9]+)\.([0-9]+)\.([0-9]+)-?(.*)$'
+    [[ "$subject" =~ $pattern ]]
+    local subject_major_version=${BASH_REMATCH[1]}
+    local subject_minor_version=${BASH_REMATCH[2]}
+    local subject_patch_version=${BASH_REMATCH[3]}
+
+    [[ "$target" =~ $pattern ]]
+    local comparison_major_version=${BASH_REMATCH[1]}
+    local comparison_minor_version=${BASH_REMATCH[2]}
+    local comparison_patch_version=${BASH_REMATCH[3]}
+
+    case $operator in
+    ==)
+        if [[ "$subject_major_version" -eq "$comparison_major_version" && "$subject_minor_version" -eq "$comparison_minor_version" && "$subject_patch_version" -eq "$comparison_patch_version" ]]; then
+            echo 1
+        else
+            echo 0
+        fi
+        return
+        ;;
+    !=)
+        if [ "$subject_major_version" -ne "$comparison_major_version" ] || [ "$subject_minor_version" -ne "$comparison_minor_version" ] || [ "$subject_patch_version" -ne \
+        "$comparison_patch_version" ]; then
+            echo 1
+        else
+            echo 0
+        fi
+        return
+        ;;
+    \>)
+        if [[ "$subject_major_version" -gt "$comparison_major_version" ]]; then
+            echo 1
+        elif [[ "$subject_major_version" -lt "$comparison_major_version" ]]; then
+            echo 0
+        elif [[ "$subject_minor_version" -gt "$comparison_minor_version" ]]; then
+            echo 1
+        elif [[ "$subject_minor_version" -lt "$comparison_minor_version" ]]; then
+            echo 0
+        elif [[ "$subject_patch_version" -gt "$comparison_patch_version" ]]; then
+            echo 1
+        else
+            echo 0
+        fi
+        return
+        ;;
+    \>=)
+        if [ "$subject_major_version" -gt "$comparison_major_version" ]; then
+            echo 1;
+        elif [ "$subject_major_version" -eq "$comparison_major_version" ]; then
+            if [ "$subject_minor_version" -gt "$comparison_minor_version" ]; then
+                echo 1
+            elif [ "$subject_minor_version" -lt "$comparison_minor_version" ]; then
+                echo 0
+            elif [ "$subject_patch_version" -ge "$comparison_patch_version" ]; then
+                echo 1
+            else
+                echo 0
+            fi
+        else
+            echo 0
+        fi
+        return
+        ;;
+    \<)
+        if [[ "$subject_major_version" -lt "$comparison_major_version" ]]; then
+            echo 1
+        elif [[ "$subject_major_version" -gt "$comparison_major_version" ]]; then
+            echo 0
+        elif [[ "$subject_minor_version" -lt "$comparison_minor_version" ]]; then
+            echo 1
+        elif [[ "$subject_minor_version" -gt "$comparison_minor_version" ]]; then
+            echo 0
+        elif [[ "$subject_patch_version" -lt "$comparison_patch_version" ]]; then
+            echo 1
+        else
+            echo 0
+        fi
+        return
+        ;;
+    \<=)
+        if [[ "$subject_major_version" -le "$comparison_major_version" && "$subject_minor_version" -le "$comparison_minor_version" && "$subject_patch_version" -le "$comparison_patch_version" ]]; then
+            echo 1
+        else
+            echo 0
+        fi
+        return
+        ;;
     esac
-    if [[ $op != $3 ]]
-    then
-        RESULT=0
+}
+
+forceSudoAuthentication() {
+    printf "${BOLD}You must with authenticate sudo privileges so that the local domain can be added to the hosts file.${NORMAL}\n"
+    sudo -l &>/dev/null
+}
+
+getMagentoPublicKeyFromAuthJson() {
+    echo $(composer config --global http-basic.repo.magento.com.username 2> /dev/null || echo "")
+}
+
+getMagentoPrivateKeyFromAuthJson() {
+    echo $(composer config --global http-basic.repo.magento.com.password 2> /dev/null || echo "")
+}
+
+createAuthJson() {
+    if [ -n "$(getMagentoPublicKeyFromAuthJson)" ] && [ -n "$(getMagentoPrivateKeyFromAuthJson)" ]; then
+        echo "{\"http-basic\": {\"repo.magento.com\": {\"username\": \"$(getMagentoPublicKeyFromAuthJson)\",\"password\": \"$(getMagentoPrivateKeyFromAuthJson)\"}}}" > $LOCATION/auth.json
+    fi
+}
+
+verifyPrerequisites() {
+    printf "\nVerifying system requirements...\n"
+
+    local result=1
+    if ! command -v composer &>/dev/null; then
+        printf "Composer is not installed on your system and is required to install Magento. Please install Composer and try again.\n"
+        result=0
     else
-        RESULT=1
+        printf "${CHECKMARK}Composer\n"
     fi
 
-    return $RESULT
+    if ! command -v docker &>/dev/null; then
+        printf "Docker is not installed on your system and is required. Please install Docker and try again.\n"
+        result=0
+    else
+        printf "${CHECKMARK}Docker\n"
+    fi
+
+    if ! command -v docker-compose &>/dev/null; then
+        printf "Docker-compose is not installed on your system and is required. Please install Docker-compose and try again.\n"
+        result=0
+    else
+        printf "${CHECKMARK}Docker-compose\n"
+    fi
+
+    while IFS= read -r container; do
+        if [[ -n "$container" && $(docker port $container) =~ ^.*:${WEB_PORT} ]]; then
+            printf "${ERROR}Port ${WEB_PORT} in use. Please stop or remove Docker container ${container} before running this script. Run ${BOLD}docker stop ${container}${NORMAL}.\n"
+            result=0
+        fi
+    done <<<"$(docker ps -q)"
+
+    printf "\n"
+
+    if [[ $result == 0 ]]; then
+        kill -s TERM $TOP_PID
+    fi
+}
+
+displayUseDefaultsMessage() {
+    printf "\n${BOLD}${GREEN}For the remaining questions, press Enter to accept the default selections.${NORMAL}\n\n"
 }
 
 setMagentoVersion() {
-    read -e -p "Which version of Magento do you want to spin up? (2.2.6, for example) " VERSION
-    VERSION_RAW=${VERSION//[^[:digit:]]/}
-}
-
-setMagentoMinorVersion() {
-IFS='.' read -ra VERSIONS <<< "$VERSION"
-COUNT=0
-for sub in "${VERSIONS[@]}"; do
-    COUNT=$(($COUNT + 1))
-    if [[ "$COUNT" == 2 ]]; then
-        MINOR_VERSION=$sub
-        break
-    fi
-done
-}
-
-setRedisEligible() {
-    if [[ "$MINOR_VERSION" -ge 2 ]]; then
-        REDIS_ELIGIBLE=1
+    read -e -p "Which version of Magento do you want to spin up? (2.4.1, for example) " VERSION
+    pattern='^([0-9]+)\.([0-9]+)\.([0-9]+)-?(.*)$'
+    [[ "$VERSION" =~ $pattern ]]
+    if [[ -z ${BASH_REMATCH[3]} ]]; then
+        printf "${ERROR}You must enter a full version number. For example, 2.3.5 or 2.3.5-p1.\n"
+        setMagentoVersion
     else
-        REDIS_ELIGIBLE=0
+        VERSION_RAW=${VERSION//[^[:alnum:]-?[:alnum:]]/}
+        VERSION=${BASH_REMATCH[0]}
+        MAJOR_VERSION=${BASH_REMATCH[1]}
+        MINOR_VERSION=${BASH_REMATCH[2]}
+        PATCH_VERSION=${BASH_REMATCH[3]}
+        SUB_VERSION=${BASH_REMATCH[4]}
     fi
-}
 
-setDefaultDockerWebImage() {
-    if [[ "$MINOR_VERSION" -ge 3 ]]; then
-        DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.2
-    elif [[ "$MINOR_VERSION" -ge 2 ]]; then
-        DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.1
+    if [ "$(versionCompare $VERSION \>= 2.2.0)" == 1 ]; then
+        USE_REDIS=1
+        USE_ELASTICSEARCH=1
     else
-        DEFAULT_DOCKER_WEB_IMAGE=webdevops/php-apache-dev:7.0
+        USE_REDIS=0
+        USE_ELASTICSEARCH=0
     fi
 }
 
 setMagentoEdition() {
     while true; do
-    read -e -p "Which edition, community or enterprise? [$DEFAULT_EDITION] " EDITION
-    case $EDITION in
-        community)
-          break
-          ;;
-        ce)
-          EDITION=community
-          break
-          ;;
-        enterprise)
-          break
-          ;;
-        ee)
-          EDITION=enterprise
-          break
-          ;;
-        "")
-          EDITION=$DEFAULT_EDITION
-          break
-          ;;
-        *)
-          echo "${RED}${BOLD}Edition can only be community, ce, enterprise, or ee${NORMAL}${RESET}"
-        esac
-    done
-}
+        read -e -p "Which edition, Open Source [ce] or Commerce [ee]? [$DEFAULT_EDITION] " EDITION
+        EDITION=${EDITION:-$DEFAULT_EDITION}
 
-setMagentoEditionSuffix() {
-    case $EDITION in
+        case $EDITION in
         community)
             EDITION_SUFFIX=ce
+            EDITION_LABEL="Open Source"
+            break
+            ;;
+        ce)
+            EDITION=community
+            EDITION_SUFFIX=ce
+            EDITION_LABEL="Open Source"
+            break
             ;;
         enterprise)
             EDITION_SUFFIX=ee
+            EDITION_LABEL="Commerce"
+            break
             ;;
-    esac
+        ee)
+            EDITION=enterprise
+            EDITION_SUFFIX=ee
+            EDITION_LABEL="Commerce"
+            break
+            ;;
+        *)
+            printf "${ERROR}${BOLD}Edition can only be community, ce, enterprise, or ee${NORMAL}\n"
+            ;;
+        esac
+    done
+
+    printf "${CHECKMARK}${BOLD}Magento ${EDITION_LABEL} ${VERSION} will be installed using:${NORMAL}\n"
+    printf " - ${BOLD}PHP ${PHP_VERSION}${NORMAL}\n"
+    printf " - ${BOLD}MariaDB 10${NORMAL}\n"
+    if [[ $USE_REDIS == 1 ]]; then
+        printf " - ${BOLD}Redis${NORMAL}\n"
+    fi
+    if [[ $USE_ELASTICSEARCH == 1 ]]; then
+        printf " - ${BOLD}Elasticsearch${NORMAL}\n"
+    fi
+    printf " - ${BOLD}xDebug${NORMAL}\n"
+
+    printf "\n"
+}
+
+setPhpVersion() {
+    if [ "$(versionCompare $VERSION \>= 2.4.0)" == 1 ]; then
+        PHP_VERSION=7.4
+    elif [ "$(versionCompare $VERSION \>= 2.3.3)" == 1 ]; then
+        PHP_VERSION=7.3
+    elif [ "$(versionCompare $VERSION \>= 2.2.11)" == 1 ]; then
+        PHP_VERSION=7.2
+    elif [ "$(versionCompare $VERSION \>= 2.1.18)" == 1 ]; then
+        PHP_VERSION=7.1
+    else
+        PHP_VERSION=7.0
+    fi
+}
+
+setDockerWebImage() {
+    setPhpVersion
+    DOCKER_PRODUCTION_WEB_IMAGE=$DEFAULT_DOCKER_PRODUCTION_WEB_IMAGE:$PHP_VERSION
+    DOCKER_DEVELOPMENT_WEB_IMAGE=$DEFAULT_DOCKER_DEVELOPMENT_WEB_IMAGE:$PHP_VERSION
+}
+
+setDbPort() {
+    local port_available=1
+    read -e -p "Which port would you like to use for the database? [$DEFAULT_DB_PORT] " DB_PORT
+    DB_PORT=${DB_PORT:-$DEFAULT_DB_PORT}
+    while IFS= read -r container; do
+        if [[ -n "$container" && $(docker port $container) =~ ^.*:${DB_PORT} ]]; then
+            port_available=0
+            printf "${ERROR}Port ${DB_PORT} is already in use. To free up port ${DB_PORT}, run ${BOLD}docker stop ${container}${NORMAL} and try again or choose another port.\n"
+        fi
+    done <<<"$(docker ps -q)"
+
+    if [[ $port_available == 1 ]]; then
+        if [ "$(validateInteger $DB_PORT)" == 1 ]; then
+            printf "${CHECKMARK}${BOLD}The database will be available to your local machine at 127.0.0.1:${DB_PORT}.${NORMAL}\n\n"
+            else
+                printf "${ERROR}Port number may not contain any non-numeric characters. Please try again.\n"
+                setDbPort
+        fi
+    else
+        setDbPort
+    fi
+}
+
+waitForDbContainerToBeReady() {
+    echo "Waiting for Docker database container to be fully up and running..."
+
+    maxcounter=60
+    counter=1
+    while ! docker exec $DOCKER_DB_CONTAINER_NAME /bin/bash -c "echo 'show databases;'|mysql -u$DB_USERNAME -p$DB_PASSWORD" > /dev/null 2>&1; do
+        sleep 1
+        counter=`expr $counter + 1`
+        if [ $counter -gt $maxcounter ]; then
+            >&2 echo "Docker database container took too long to initialize. Exiting..."
+            kill -s TERM $TOP_PID
+        fi;
+    done
+}
+
+setRedisPort() {
+    if [[ $USE_REDIS == 1 ]]; then
+        local port_available=1
+        read -e -p "Which port would you like to use for Redis? [$DEFAULT_REDIS_PORT] " REDIS_PORT
+        REDIS_PORT=${REDIS_PORT:-$DEFAULT_REDIS_PORT}
+        while IFS= read -r container; do
+            if [[ -n "$container" && $(docker port $container) =~ ^.*:${REDIS_PORT} ]]; then
+                port_available=0
+                printf "${ERROR}Port ${REDIS_PORT} is already in use. To free up port ${REDIS_PORT}, run ${BOLD}docker stop ${container}${NORMAL} and try again or choose another port.\n"
+            fi
+        done <<<"$(docker ps -q)"
+
+        if [[ $port_available == 1 ]]; then
+            if [ "$(validateInteger $REDIS_PORT)" == 1 ]; then
+                printf "${CHECKMARK}${BOLD}Redis will be available to your local machine at 127.0.0.1:${REDIS_PORT}.${NORMAL}\n\n"
+                else
+                    printf "${ERROR}Port number may not contain any non-numeric characters. Please try again.\n"
+                    setRedisPort
+            fi
+        else
+            setRedisPort
+        fi
+    fi
+}
+
+setElasticsearchPort() {
+    if [[ $USE_ELASTICSEARCH == 1 ]]; then
+        local port_available=1
+        read -e -p "Which port would you like to use for Elasticsearch? [$DEFAULT_ELASTICSEARCH_PORT] " ELASTICSEARCH_PORT
+        ELASTICSEARCH_PORT=${ELASTICSEARCH_PORT:-$DEFAULT_ELASTICSEARCH_PORT}
+
+        while IFS= read -r container; do
+            if [[ -n "$container" && $(docker port $container) =~ ^.*:${ELASTICSEARCH_PORT} ]]; then
+                port_available=0
+                printf "${ERROR}Port ${ELASTICSEARCH_PORT} is already in use. To free up port ${ELASTICSEARCH_PORT}, run ${BOLD}docker stop ${container}${NORMAL} and try again or choose another port.\n"
+            fi
+        done <<<"$(docker ps -q)"
+
+        if [[ $port_available == 1 ]]; then
+            if [ "$(validateInteger $ELASTICSEARCH_PORT)" == 1 ]; then
+                printf "${CHECKMARK}${BOLD}Elasticsearch will be available to your local machine at 127.0.0.1:${ELASTICSEARCH_PORT}.${NORMAL}\n\n"
+                else
+                    printf "${ERROR}Port number may not contain any non-numeric characters. Please try again.\n"
+                    setElasticsearchPort
+            fi
+        else
+            setElasticsearchPort
+        fi
+    fi
+}
+
+setDockerElasticsearchImage() {
+    if [ "$(versionCompare $VERSION \>= 2.3.5)" == 1 ]; then
+        DOCKER_ELASTICSEARCH_IMAGE=docker.elastic.co/elasticsearch/elasticsearch-oss:7.6.2
+        MAGENTO_SEARCH_ENGINE_CONFIG_VALUE=elasticsearch7
+    elif [ "$(versionCompare $VERSION \>= 2.2.8)" == 1 ]; then
+        DOCKER_ELASTICSEARCH_IMAGE=docker.elastic.co/elasticsearch/elasticsearch-oss:6.8.9
+        MAGENTO_SEARCH_ENGINE_CONFIG_VALUE=elasticsearch6
+    elif [ "$(versionCompare $VERSION \>= 2.2.0)" == 1 ]; then
+        DOCKER_ELASTICSEARCH_IMAGE=docker.elastic.co/elasticsearch/elasticsearch:5.2.2
+        MAGENTO_SEARCH_ENGINE_CONFIG_VALUE=elasticsearch5
+    else
+        DOCKER_ELASTICSEARCH_IMAGE=
+        MAGENTO_SEARCH_ENGINE_CONFIG_VALUE=
+        USE_ELASTICSEARCH=0
+    fi
+}
+
+setIdeKey() {
+    local port_available=1
+    read -e -p "What would you like the IDE Key to be? [$DEFAULT_IDE_KEY] " IDE_KEY
+    IDE_KEY=${IDE_KEY:-$DEFAULT_IDE_KEY}
+    if [[ "$IDE_KEY" =~ [^a-zA-Z0-9] ]]; then
+        printf "${ERROR}${BOLD}The IDE Key must only contain letters and numbers without any spaces or special characters. Please try again.${NORMAL}\n"
+        setIdeKey
+        else
+            printf "${CHECKMARK}${BOLD}Your IDE Key will be set to ${IDE_KEY}.${NORMAL}\n\n"
+    fi
 }
 
 setSshKey() {
     while true; do
-      read -e -p "What is the path to your private SSH key? [$DEFAULT_SSH_KEY_PATH] " SSH_KEY_PATH
-      SSH_KEY_PATH=${SSH_KEY_PATH:-$DEFAULT_SSH_KEY_PATH}
+        read -e -p "What is the path to your private SSH key? [$DEFAULT_SSH_KEY_PATH] " SSH_KEY_PATH
+        SSH_KEY_PATH=${SSH_KEY_PATH:-$DEFAULT_SSH_KEY_PATH}
 
-      if [ -f "$SSH_KEY_PATH" ]; then
-        break
-      fi
+        if [ -f "$SSH_KEY_PATH" ]; then
+            SSH_FILENAME=$(basename $SSH_KEY_PATH)
+            break
+        fi
 
-      if [ ! -f "$SSH_KEY_PATH" ]; then
-        echo "${RED}${BOLD}$SSH_KEY_PATH does not exist, please try again${NORMAL}${RESET}"
-      fi
+        if [ ! -f "$SSH_KEY_PATH" ]; then
+            printf "${ERROR}${BOLD}$SSH_KEY_PATH does not exist, please try again${NORMAL}\n"
+        fi
     done
-}
 
-setSshFilename() {
-    SSH_FILENAME=$(basename $SSH_KEY_PATH)
-}
-
-setProjectParentDirectory() {
-    read -e -p "In which directory should we create the project? [$DEFAULT_BASEPATH] " BASEPATH
-    BASEPATH=${BASEPATH:-$DEFAULT_BASEPATH}
+    printf "${CHECKMARK}${BOLD}Your public and private SSH keys will be copied into the web container.${NORMAL}\n\n"
 }
 
 setProjectDirectoryName() {
+    BASEPATH=$DEFAULT_BASEPATH
     DEFAULT_DIRNAME=magento$VERSION_RAW$EDITION_SUFFIX
     while true; do
-      read -e -p "Which directory name should we use for the project? [magento$VERSION_RAW$EDITION_SUFFIX] " DIRNAME
-      DIRNAME=${DIRNAME:-$DEFAULT_DIRNAME}
-      LOCATION=$BASEPATH$DIRNAME
+        read -e -p "What directory name should we use for the project? [$DEFAULT_DIRNAME] " DIRNAME
+        DIRNAME=${DIRNAME:-$DEFAULT_DIRNAME}
+        LOCATION=$BASEPATH/$DIRNAME
 
-      if [ ! -d "$LOCATION" ]; then
-        break
-      fi
+        if [ ! -d "$LOCATION" ]; then
+            break
+        fi
 
-      if [ -d "$LOCATION" ]; then
-        echo "${RED}${BOLD}$LOCATION already exists, please choose another directory name${NORMAL}${RESET}"
-      fi
+        if [ -d "$LOCATION" ]; then
+            printf "${ERROR}${BOLD}$LOCATION already exists, please choose another directory name${NORMAL}\n"
+        fi
     done
+
+    printf "${CHECKMARK}${BOLD}Your project will live at ${LOCATION}.${NORMAL}\n\n"
 }
 
 setDomainName() {
-    DEFAULT_DOCKER_DOMAIN_NAME=local.$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g").com
-    read -e -p "What domain name should we use? [$DEFAULT_DOCKER_DOMAIN_NAME] " DOCKER_DOMAIN_NAME
-    DOCKER_DOMAIN_NAME=${DOCKER_DOMAIN_NAME:-$DEFAULT_DOCKER_DOMAIN_NAME}
+    DEFAULT_LOCAL_DOMAIN_NAME=local.$(echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g").com
+    read -e -p "What domain name should we use? [$DEFAULT_LOCAL_DOMAIN_NAME] " LOCAL_DOMAIN_NAME
+    LOCAL_DOMAIN_NAME=${LOCAL_DOMAIN_NAME:-$DEFAULT_LOCAL_DOMAIN_NAME}
+
+    printf "${CHECKMARK}${BOLD}${LOCAL_DOMAIN_NAME} will be added to your /etc/hosts file if it does not already exist.${NORMAL}\n\n"
 }
 
 setUseSampleData() {
     while true; do
-      read -e -p "Install sample data? [$DEFAULT_USE_SAMPLE_DATA] " USE_SAMPLE_DATA
-      USE_SAMPLE_DATA=${USE_SAMPLE_DATA:-$DEFAULT_USE_SAMPLE_DATA}
-      case $USE_SAMPLE_DATA in
-          y)
-              USE_SAMPLE_DATA=1
-              break
-              ;;
-          1)
-              break
-              ;;
-          n)
-              USE_SAMPLE_DATA=0
-              break
-              ;;
-          0)
-              break
-              ;;
-          "")
-              USE_SAMPLE_DATA=$DEFAULT_USE_SAMPLE_DATA
-              break
-              ;;
-          *)
-              echo "${RED}${BOLD}Valid values are y or n${NORMAL}${RESET}"
-      esac
-    done
-}
-
-setDockerWebImage() {
-    read -e -p "Which Docker web image? [$DEFAULT_DOCKER_WEB_IMAGE] " DOCKER_WEB_IMAGE
-    DOCKER_WEB_IMAGE=${DOCKER_WEB_IMAGE:-$DEFAULT_DOCKER_WEB_IMAGE}
-}
-
-setDockerDbImage() {
-    read -e -p "Which Docker database image? [$DEFAULT_DOCKER_DB_IMAGE] " DOCKER_DB_IMAGE
-    DOCKER_DB_IMAGE=${DOCKER_DB_IMAGE:-$DEFAULT_DOCKER_DB_IMAGE}
-}
-
-setUseRedis() {
-    if [ "$REDIS_ELIGIBLE" == 1 ]; then
-      while true; do
-        read -e -p "Use Redis for caching and session storage? [$DEFAULT_USE_REDIS] " USE_REDIS
-        USE_REDIS=${USE_REDIS:-$DEFAULT_USE_REDIS}
-        case $USE_REDIS in
-            y)
-                USE_REDIS=1
-                break
-                ;;
-            1)
-                break
-                ;;
-            n)
-                USE_REDIS=0
-                break
-                ;;
-            0)
-                break
-                ;;
-            "")
-                USE_REDIS=$DEFAULT_USE_REDIS
-                break
-                ;;
-            *)
-                echo "${RED}${BOLD}Valid values are y or n${NORMAL}${RESET}"
+        read -e -p "Install sample data? [$DEFAULT_USE_SAMPLE_DATA] " USE_SAMPLE_DATA
+        USE_SAMPLE_DATA=${USE_SAMPLE_DATA:-$DEFAULT_USE_SAMPLE_DATA}
+        case $USE_SAMPLE_DATA in
+        y)
+            USE_SAMPLE_DATA=1
+            break
+            ;;
+        1)
+            break
+            ;;
+        n)
+            USE_SAMPLE_DATA=0
+            break
+            ;;
+        0)
+            break
+            ;;
+        "")
+            USE_SAMPLE_DATA=$DEFAULT_USE_SAMPLE_DATA
+            break
+            ;;
+        *)
+            printf "${ERROR}${BOLD}Valid values are y or n${NORMAL}\n"
+            ;;
         esac
-      done
-    else
-      USE_REDIS=0
-    fi
-}
+    done
 
-setDockerRedisImage() {
-    if [[ "$USE_REDIS" == 1 ]]; then
-        read -e -p "Which Docker Redis image? [$DEFAULT_DOCKER_REDIS_IMAGE] " DOCKER_REDIS_IMAGE
-        DOCKER_REDIS_IMAGE=${DOCKER_REDIS_IMAGE:-$DEFAULT_DOCKER_REDIS_IMAGE}
+    if [[ $USE_SAMPLE_DATA == 1 ]]; then
+        printf "${CHECKMARK}${BOLD}Magento ${EDITION_LABEL} ${VERSION} will be installed with sample data. This will result in a longer installation process.${NORMAL}\n\n"
+    else
+        printf "${CHECKMARK}${BOLD}Magento ${EDITION_LABEL} ${VERSION} will be installed without sample data.${NORMAL}\n\n"
     fi
 }
 
 addDomainNameToHostsFile() {
-    echo "${RED}${BOLD}Please enter sudo password so that an entry can be made to the /etc/hosts file${NORMAL}${RESET}"
-    if ! grep -q ${DOCKER_DOMAIN_NAME} /etc/hosts; then
-      sudo -- sh -c "echo '127.0.0.1 ${DOCKER_DOMAIN_NAME}' >> /etc/hosts"
+    if ! grep -q ${LOCAL_DOMAIN_NAME} /etc/hosts; then
+        sudo -- sh -c "echo '127.0.0.1 ${LOCAL_DOMAIN_NAME}' >> /etc/hosts"
     fi
-
-    sudo ifconfig lo0 alias 10.200.10.1/24
 }
 
 downloadMagentoFiles() {
-    mkdir -p $LOCATION
-    chown -R ${USER}:${GROUP} $LOCATION
-    composer create-project --ignore-platform-reqs --repository=https://repo.magento.com/ magento/project-$EDITION-edition:$VERSION $LOCATION
-    find $LOCATION -name '.htaccess' -exec sed -i '' s/756M/2048M/g {} + && \
-    find $LOCATION -name '.htaccess' -exec sed -i '' s/768M/2048M/g {} + && \
-    find $LOCATION -name '.user.ini' -exec sed -i '' s/756M/2048M/g {} + && \
-    find $LOCATION -name '.user.ini' -exec sed -i '' s/768M/2048M/g {} +
-}
-
-createAuthJson() {
-    echo "{\"http-basic\": {\"repo.magento.com\": {\"username\": \"$MAGENTO_PUBLIC_KEY\",\"password\": \"$MAGENTO_PRIVATE_KEY\"}}}" > $LOCATION/auth.json
-}
-
-createDockerfile() {
-mkdir -p $LOCATION
-DOCKERFILE=$LOCATION/Dockerfile
-touch $DOCKERFILE
-cat <<EOT >> $DOCKERFILE
-FROM ${DOCKER_WEB_IMAGE}
-EOT
+    mkdir -p "$LOCATION"
+    chown -R ${USER}:${GROUP} "$LOCATION"
+    composer create-project --ignore-platform-reqs --repository=https://repo.magento.com/ magento/project-$EDITION-edition:$VERSION "$LOCATION"
+    find $LOCATION -name '.htaccess' -exec sed -i '' s/756M/2048M/g {} + &&
+        find $LOCATION -name '.htaccess' -exec sed -i '' s/768M/2048M/g {} + &&
+        find $LOCATION -name '.user.ini' -exec sed -i '' s/756M/4096M/g {} + &&
+        find $LOCATION -name '.user.ini' -exec sed -i '' s/768M/4096M/g {} +
 }
 
 createDockerComposeFile() {
-DOCKER_COMPOSE_FILE=$LOCATION/docker-compose.yml
-if [[ -f "$DOCKER_COMPOSE_FILE" ]]; then
-    rm $DOCKER_COMPOSE_FILE
-fi
+    DOCKER_COMPOSE_FILE=$LOCATION/docker-compose.yml
+    if [[ -f "$DOCKER_COMPOSE_FILE" ]]; then
+        rm $DOCKER_COMPOSE_FILE
+    fi
 
-touch $DOCKER_COMPOSE_FILE
+    touch $DOCKER_COMPOSE_FILE
 
-DOCKER_SERVICE_PREFIX=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
-DOCKER_WEB_SERVICE_NAME=web
-DOCKER_DB_SERVICE_NAME=mysql
-DOCKER_REDIS_SERVICE_NAME=redis
-DOCKER_ELASTICSEARCH_SERVICE_NAME=elasticsearch
+    DOCKER_WEB_SERVICE_NAME=web
+    DOCKER_DB_SERVICE_NAME=mysql
+    DOCKER_REDIS_SERVICE_NAME=redis
+    DOCKER_ELASTICSEARCH_SERVICE_NAME=elasticsearch
 
-DOCKER_CONTAINER_PREFIX=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
-DOCKER_WEB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_web
-DOCKER_DB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_mysql
-DOCKER_REDIS_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_redis
-DOCKER_ELASTICSEARCH_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_elasticsearch
+    DOCKER_CONTAINER_PREFIX=$(echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
+    DOCKER_WEB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_web
+    DOCKER_DB_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_mysql
+    DOCKER_REDIS_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_redis
+    DOCKER_ELASTICSEARCH_CONTAINER_NAME=${DOCKER_CONTAINER_PREFIX}_elasticsearch
 
-DOCKER_DB_NAME=$( echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
+    DB_NAME=$(echo ${DIRNAME} | sed "s/[^a-zA-Z0-9]//g")
 
-cat <<EOT >> $DOCKER_COMPOSE_FILE
+    cat <<EOT >>$DOCKER_COMPOSE_FILE
 version: '3'
 services:
     ${DOCKER_WEB_SERVICE_NAME}:
-EOT
-
-if [[ "$MINOR_VERSION" -ge 3 ]]; then
-cat <<EOT >> $DOCKER_COMPOSE_FILE
-        build: .
-EOT
-else
-cat <<EOT >> $DOCKER_COMPOSE_FILE
-        image: ${DOCKER_WEB_IMAGE}
-EOT
-fi
-
-cat <<EOT >> $DOCKER_COMPOSE_FILE
+        image: ${DOCKER_PRODUCTION_WEB_IMAGE}
         container_name: ${DOCKER_WEB_CONTAINER_NAME}
         user: application
         restart: always
@@ -375,12 +557,15 @@ cat <<EOT >> $DOCKER_COMPOSE_FILE
           - "${LOCATION}:/app:delegated"
           - "root-ssh-files:/root/.ssh/"
           - "user-ssh-files:/home/application/.ssh/"
+EOT
+
+    cat <<EOT >>$DOCKER_COMPOSE_FILE
         environment:
-          - WEB_ALIAS_DOMAIN=${DOCKER_DOMAIN_NAME}
+          - WEB_ALIAS_DOMAIN=${LOCAL_DOMAIN_NAME}
           - WEB_DOCUMENT_ROOT=/app/pub
           - PHP_DATE_TIMEZONE=EST
           - PHP_DISPLAY_ERRORS=1
-          - PHP_MEMORY_LIMIT=2048M
+          - PHP_MEMORY_LIMIT=4096M
           - PHP_MAX_EXECUTION_TIME=300
           - PHP_POST_MAX_SIZE=500M
           - PHP_UPLOAD_MAX_FILESIZE=1024M
@@ -389,23 +574,44 @@ cat <<EOT >> $DOCKER_COMPOSE_FILE
           - XDEBUG_REMOTE_HOST=host.docker.internal
           - XDEBUG_REMOTE_PORT=9000
           - php.xdebug.remote_enable=1
-          - php.xdebug.idekey=PHPSTORM
+          - php.xdebug.idekey=${IDE_KEY}
           - PHP_DISMOD=ioncube
         ports:
-          - "443:443"
-          - "32834:22"
+          - "${WEB_PORT}:443"
         links:
           - ${DOCKER_DB_SERVICE_NAME}:mysql
+EOT
+
+    if [[ "$USE_ELASTICSEARCH" == 1 ]]; then
+        cat <<EOT >>$DOCKER_COMPOSE_FILE
           - ${DOCKER_ELASTICSEARCH_SERVICE_NAME}:elasticsearch
 EOT
+    fi
 
-if [[ "$USE_REDIS" == 1 ]]; then
-cat <<EOT >> $DOCKER_COMPOSE_FILE
+    if [[ "$USE_REDIS" == 1 ]]; then
+        cat <<EOT >>$DOCKER_COMPOSE_FILE
           - ${DOCKER_REDIS_SERVICE_NAME}:redis
 EOT
-fi
+    fi
 
-cat <<EOT >> $DOCKER_COMPOSE_FILE
+    cat <<EOT >>$DOCKER_COMPOSE_FILE
+        depends_on:
+          - ${DOCKER_DB_SERVICE_NAME}
+EOT
+
+    if [[ "$USE_ELASTICSEARCH" == 1 ]]; then
+        cat <<EOT >>$DOCKER_COMPOSE_FILE
+          - ${DOCKER_ELASTICSEARCH_SERVICE_NAME}
+EOT
+    fi
+
+    if [[ "$USE_REDIS" == 1 ]]; then
+        cat <<EOT >>$DOCKER_COMPOSE_FILE
+          - ${DOCKER_REDIS_SERVICE_NAME}
+EOT
+    fi
+
+    cat <<EOT >>$DOCKER_COMPOSE_FILE
     ${DOCKER_DB_SERVICE_NAME}:
         image: ${DOCKER_DB_IMAGE}
         container_name: ${DOCKER_DB_CONTAINER_NAME}
@@ -414,7 +620,7 @@ cat <<EOT >> $DOCKER_COMPOSE_FILE
           - db-data:/var/lib/mysql
         environment:
           - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
-          - MYSQL_DATABASE=${DOCKER_DB_NAME}
+          - MYSQL_DATABASE=${DB_NAME}
         ports:
           - "${DB_PORT}:3306"
         command: [
@@ -423,28 +629,30 @@ cat <<EOT >> $DOCKER_COMPOSE_FILE
         ]
 EOT
 
-if [[ "$USE_REDIS" == 1 ]]; then
-cat <<EOT >> $DOCKER_COMPOSE_FILE
+    if [[ "$USE_REDIS" == 1 ]]; then
+        cat <<EOT >>$DOCKER_COMPOSE_FILE
     ${DOCKER_REDIS_SERVICE_NAME}:
         image: ${DOCKER_REDIS_IMAGE}
         container_name: ${DOCKER_REDIS_CONTAINER_NAME}
         restart: always
         ports:
-          - "6379:6379"
+          - "${REDIS_PORT}:6379"
         volumes:
           - redis-data:/data
 EOT
-fi
+    fi
 
-cat <<EOT >> $DOCKER_COMPOSE_FILE
+    if [[ "$USE_ELASTICSEARCH" == 1 ]]; then
+        cat <<EOT >>$DOCKER_COMPOSE_FILE
     ${DOCKER_ELASTICSEARCH_SERVICE_NAME}:
-        image: docker.elastic.co/elasticsearch/elasticsearch:5.2.2
+        image: ${DOCKER_ELASTICSEARCH_IMAGE}
         container_name: ${DOCKER_ELASTICSEARCH_CONTAINER_NAME}
         environment:
             - cluster.name=docker-cluster
             - bootstrap.memory_lock=true
             - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-            - "xpack.security.enabled=false"
+            - discovery.type=single-node
+            #- "xpack.security.enabled=false"
         ulimits:
             memlock:
                 soft: -1
@@ -457,8 +665,11 @@ cat <<EOT >> $DOCKER_COMPOSE_FILE
         volumes:
             - elasticsearch-data:/usr/share/elasticsearch/data
         ports:
-            - 9200:9200
+            - ${ELASTICSEARCH_PORT}:9200
+EOT
+    fi
 
+    cat <<EOT >>$DOCKER_COMPOSE_FILE
 volumes:
     db-data:
         external: false
@@ -466,16 +677,28 @@ volumes:
         external: false
     user-ssh-files:
         external: false
+EOT
+
+    if [[ "$USE_ELASTICSEARCH" == 1 ]]; then
+        cat <<EOT >>$DOCKER_COMPOSE_FILE
     elasticsearch-data:
         external: false
 EOT
+    fi
 
-if [[ "$USE_REDIS" == 1 ]]; then
-cat <<EOT >> $DOCKER_COMPOSE_FILE
+    if [[ "$USE_REDIS" == 1 ]]; then
+        cat <<EOT >>$DOCKER_COMPOSE_FILE
     redis-data:
         external: false
 EOT
-fi
+    fi
+}
+
+replaceProductionWebImageWithDevelopmentWebImage() {
+    sed -i "" "s|${DOCKER_PRODUCTION_WEB_IMAGE}|${DOCKER_DEVELOPMENT_WEB_IMAGE}|" "$DOCKER_COMPOSE_FILE"
+    printf "Replacing production-ready web image with dev-ready web image...\n"
+    docker-compose -f $DOCKER_COMPOSE_FILE down
+    docker-compose -f $DOCKER_COMPOSE_FILE up -d --build
 }
 
 createDockerContainers() {
@@ -492,122 +715,200 @@ createDockerContainers() {
     docker cp ${SSH_KEY_PATH}.pub ${DOCKER_WEB_CONTAINER_NAME}:/home/application/.ssh/authorized_keys
     docker exec -uroot $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "chmod 600 /home/application/.ssh/authorized_keys"
     docker exec -uroot $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "chown -R application:application /home/application/.ssh/"
-
+    docker exec -uroot $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "composer self-update 1.10.13"
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "cd /app && composer update"
 
     if [[ "$USE_SAMPLE_DATA" == 1 ]]; then
-    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento sampledata:deploy"
+        docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento sampledata:deploy"
     fi
 }
 
 installMagento() {
-    MAGENTO_INSTALL_COMMAND="php /app/bin/magento setup:install \
-    --admin-firstname=John \
-    --admin-lastname=Doe \
-    --admin-email=admin@example.com \
-    --admin-user=$ADMIN_USERNAME \
-    --admin-password=$ADMIN_PASSWORD \
-    --base-url=https://$DOCKER_DOMAIN_NAME \
-    --base-url-secure=https://$DOCKER_DOMAIN_NAME \
-    --backend-frontname=admin \
-    --db-host=mysql \
-    --db-name=$DOCKER_DB_NAME \
-    --db-user=$DB_USERNAME \
-    --db-password=$DB_PASSWORD \
-    --use-rewrites=1 \
-    --language=en_US \
-    --currency=USD \
-    --timezone=America/New_York \
-    --use-secure-admin=1 \
+    MAGENTO_INSTALL_ARGS="
+    --admin-firstname=John
+    --admin-lastname=Doe
+    --admin-email=admin@example.com
+    --admin-user='$ADMIN_USERNAME'
+    --admin-password='$ADMIN_PASSWORD'
+    --base-url='https://$LOCAL_DOMAIN_NAME'
+    --base-url-secure='https://$LOCAL_DOMAIN_NAME'
+    --backend-frontname=admin
+    --db-host=mysql
+    --db-name='$DB_NAME'
+    --db-user='$DB_USERNAME'
+    --db-password='$DB_PASSWORD'
+    --use-rewrites=1
+    --language=en_US
+    --currency=USD
+    --timezone=America/New_York
+    --use-secure-admin=1
     --admin-use-security-key=1"
 
-    if [[ "$USE_REDIS" == 1 ]]; then
-        MAGENTO_INSTALL_COMMAND=" ${MAGENTO_INSTALL_COMMAND} --session-save=redis \
-        --session-save-redis-host=redis \
-        --session-save-redis-port=6379 \
-        --session-save-redis-db=2 \
-        --cache-backend-redis-server=redis \
-        --cache-backend-redis-db=0 \
-        --cache-backend-redis-port=6379 \
-        --page-cache-redis-server=redis \
-        --page-cache-redis-db=1 \
-        --page-cache-redis-port=6379 \
-        --page-cache-redis-compress-data=0"
+    if [ $USE_ELASTICSEARCH == 1 ] && [ "$(versionCompare $VERSION \>= 2.4.0)" == 1 ]; then
+        MAGENTO_INSTALL_ARGS="${MAGENTO_INSTALL_ARGS}
+    --elasticsearch-host=elasticsearch
+    --elasticsearch-port=9200
+    --elasticsearch-enable-auth=0
+    --elasticsearch-index-prefix=magento2"
     fi
 
-    if [[ "$USE_REDIS" == 0 ]]; then
-        MAGENTO_INSTALL_COMMAND=" ${MAGENTO_INSTALL_COMMAND} --session-save='files'"
+    if [[ "$USE_REDIS" == 1 ]]; then
+        MAGENTO_INSTALL_ARGS="${MAGENTO_INSTALL_ARGS}
+    --session-save=redis
+    --session-save-redis-host=redis
+    --session-save-redis-port=6379
+    --session-save-redis-db=2
+    --cache-backend-redis-server=redis
+    --cache-backend-redis-db=0
+    --cache-backend-redis-port=6379
+    --page-cache-redis-server=redis
+    --page-cache-redis-db=1
+    --page-cache-redis-port=6379
+    --page-cache-redis-compress-data=0"
+    else
+        MAGENTO_INSTALL_ARGS="${MAGENTO_INSTALL_ARGS}
+    --session-save='files'"
     fi
 
     if [[ "$USE_SAMPLE_DATA" == 1 ]]; then
-        MAGENTO_INSTALL_COMMAND=" ${MAGENTO_INSTALL_COMMAND} --use-sample-data"
+        MAGENTO_INSTALL_ARGS="${MAGENTO_INSTALL_ARGS}
+    --use-sample-data"
     fi
 
-    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "$MAGENTO_INSTALL_COMMAND"
+    MAGENTO_INSTALL_ARGS=$(echo $MAGENTO_INSTALL_ARGS | xargs)
+
+    waitForDbContainerToBeReady
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento setup:install $MAGENTO_INSTALL_ARGS"
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento deploy:mode:set developer"
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento cache:disable full_page block_html"
+
+    if [ $USE_ELASTICSEARCH == 1 ] && [ "$(versionCompare $VERSION \>= 2.2.0)" == 1 ]; then
+        docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento config:set --lock-env catalog/search/engine ${MAGENTO_SEARCH_ENGINE_CONFIG_VALUE}"
+        docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento app:config:import"
+    fi
+}
+
+warmCaches() {
+        # just to prewarm some of the caches
+    curl --insecure https://$LOCAL_DOMAIN_NAME &> /dev/null || echo ""
 }
 
 handleSuccess() {
-printf "\n"
-printf "${GREEN}${BOLD}SUCCESS!!!${NORMAL}${RESET} \n"
-printf "\n"
-printf "${GREEN}${BOLD}Website${NORMAL}${RESET} \n"
-printf "${BOLD}Frontend:${NORMAL} https://$DOCKER_DOMAIN_NAME \n"
-printf "${BOLD}Admin:${NORMAL} https://$DOCKER_DOMAIN_NAME/admin/ \n"
-printf "${BOLD}Username:${NORMAL} $ADMIN_USERNAME \n"
-printf "${BOLD}Password:${NORMAL} $ADMIN_PASSWORD \n"
-printf "\n"
-printf "${GREEN}${BOLD}Database${NORMAL}${RESET} \n"
-printf "${BOLD}Host:${NORMAL} 127.0.0.1 \n"
-printf "${BOLD}Port:${NORMAL} $DB_PORT \n"
-printf "${BOLD}Username:${NORMAL} $DB_USERNAME \n"
-printf "${BOLD}Password:${NORMAL} $DB_PASSWORD \n"
-printf "\n"
-printf "${GREEN}${BOLD}Xdebug${NORMAL}${RESET} \n"
-printf "${BOLD}Port:${NORMAL} 9000 \n"
-printf "${BOLD}IDE Key:${NORMAL} MAGENTO \n"
-printf "\n"
-printf "In order to allow Xdebug to route back to the host machine, we created a loopback network by running this command: ${BOLD}ifconfig lo0 alias 10.200.10.1/24${NORMAL} \n"
-printf "If you restart your computer, you will need to run that command again for Xdebug to work. It is most convenient to create an alias in your ~/.bash_profile so that you can simply type a command to run it again."
-printf "\n"
-printf "\n"
-printf "${RED}${BOLD}This environment configuration is only intended for use in development. It is not secure enough for production use.${NORMAL}${RESET}"
-printf "\n"
-exit
+    printf "\n"
+    printf "${CHECKMARK}${BOLD}SUCCESS!${NORMAL}\n"
+    if [[ $USE_SAMPLE_DATA == 1 ]]; then
+        printf "${CHECKMARK}${BOLD}Installed:${NORMAL} Magento ${EDITION_LABEL} ${VERSION} with sample data\n"
+    else
+        printf "${CHECKMARK}${BOLD}Installed:${NORMAL} Magento ${EDITION_LABEL} ${VERSION} without sample data\n"
+    fi
+    printf "${CHECKMARK}${BOLD}Project Location:${NORMAL} ${LOCATION}\n"
+    printf "\n"
+    printf "${GREEN}${BOLD}Website${NORMAL}${RESET} \n"
+    printf "${BOLD}Frontend:${NORMAL} https://$LOCAL_DOMAIN_NAME \n"
+    printf "${BOLD}Admin:${NORMAL} https://$LOCAL_DOMAIN_NAME/admin/ \n"
+    printf "${BOLD}Username:${NORMAL} $ADMIN_USERNAME \n"
+    printf "${BOLD}Password:${NORMAL} $ADMIN_PASSWORD \n"
+    printf "\n"
+    printf "${GREEN}${BOLD}Database${NORMAL}${RESET} \n"
+    printf "${BOLD}Host:${NORMAL} 127.0.0.1:$DB_PORT \n"
+    printf "${BOLD}Username:${NORMAL} $DB_USERNAME \n"
+    printf "${BOLD}Password:${NORMAL} $DB_PASSWORD \n"
+    printf "${BOLD}Docker Internal Host:${NORMAL} mysql:3306 \n"
+    printf "\n"
+
+    if [[ $USE_REDIS == 1 ]]; then
+        printf "${GREEN}${BOLD}Redis${NORMAL}${RESET} \n"
+        printf "${BOLD}Host:${NORMAL} 127.0.0.1:$REDIS_PORT \n"
+        printf "${BOLD}Docker Internal Host:${NORMAL} redis:6379 \n"
+        printf "\n"
+    fi
+
+    if [[ $USE_ELASTICSEARCH == 1 ]]; then
+        printf "${GREEN}${BOLD}Elasticsearch${NORMAL}${RESET} \n"
+        printf "${BOLD}Host:${NORMAL} 127.0.0.1:$ELASTICSEARCH_PORT \n"
+        printf "${BOLD}Docker Internal Host:${NORMAL} elasticsearch:9200 \n"
+        printf "\n"
+    fi
+
+    printf "${GREEN}${BOLD}Xdebug${NORMAL}${RESET} \n"
+    printf "${BOLD}Port:${NORMAL} 9000 \n"
+    printf "${BOLD}IDE Key:${NORMAL} ${IDE_KEY} \n"
+    printf "\n"
+    printf "${GREEN}${BOLD}Usage Instructions${NORMAL}${RESET} \n"
+    printf "You can fully tear it down and destroy or remove containers. Your data will not be lost. All persistent files/data are stored in volumes.\n\n"
+    printf "${BOLD}Tear down: ${NORMAL}docker-compose down \n"
+    printf "${BOLD}Spin up: ${NORMAL}docker-compose up -d \n"
+    printf "${BOLD}SSH into web container: ${NORMAL}docker exec -it $DOCKER_WEB_CONTAINER_NAME bash\n"
+    printf "${BOLD}SSH into web container as root: ${NORMAL}docker exec -uroot -it $DOCKER_WEB_CONTAINER_NAME bash\n"
+    printf "${BOLD}Issue command to web container: ${NORMAL}docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c \"ls -altr\"\n"
+    if [[ $USE_REDIS == 1 ]]; then
+        printf "${BOLD}Flush Redis: ${NORMAL}docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c \"ls -altr\"\n"
+    fi
+    printf "\n"
+    printf "${GREEN}${BOLD}Helpful Hint: ${NORMAL}If you don't need/want xDebug, you can change the web image to a faster, more performant version of the same Docker image. To do so: \n"
+    printf " 1. docker-compose down\n"
+    printf " 2. Open docker-compose.yml in a text editor\n"
+    printf " 3. Find the line where the web service's Docker image is declared. It should be similar to 'webdevops/php-apache-dev'\n"
+    printf " 4. Remove the '-dev' suffix from the image name, leaving everyting else as it is\n"
+    printf " 5. docker-compose up -d\n"
+    printf " 6. You should notice that the VM runs considerably faster\n"
+    printf "\n"
+    printf "${BOLD}This environment configuration is only intended for use in development. It is not secure enough for production use.${NORMAL}${RESET}"
+    printf "\n"
 }
 
 handleError() {
-printf "\n"
-printf "${RED}${BOLD}An error has occurred. Removing newly installed files and/or Docker containers...${NORMAL}${RESET} \n"
-printf "\n"
-docker-compose -f $DOCKER_COMPOSE_FILE down --volumes
-rm -R $LOCATION
-exit
+    while true; do
+        printf "\n"
+        read -e -p "An error has occurred and the script can no longer continue. Do you want to remove all new Docker containers, volumes and/or installed project files? [$DEFAULT_HANDLE_ERROR]" HANDLE_ERROR
+        printf "\n"
+        HANDLE_ERROR=${HANDLE_ERROR:-$DEFAULT_HANDLE_ERROR}
+
+        case $HANDLE_ERROR in
+        n)
+            printf "${ERROR}${BOLD}The script has been terminated but your Docker containers, volumes, and/or installed project files are still intact.${NORMAL}${RESET} \n"
+            break
+            ;;
+        N)
+            printf "${ERROR}${BOLD}The script has been terminated but your Docker containers, volumes, and/or installed project files are still intact.${NORMAL}${RESET} \n"
+            break
+            ;;
+        *)
+            printf "\n"
+            printf "${ERROR}${BOLD}Removing newly installed files and/or Docker containers and volumes...${NORMAL}${RESET} \n"
+            printf "\n"
+            docker-compose -f $DOCKER_COMPOSE_FILE down --volumes
+            rm -R $LOCATION
+            break
+            ;;
+        esac
+    done
+    exit
 }
 
+verifyPrerequisites
+forceSudoAuthentication
 setMagentoVersion
-setMagentoMinorVersion
-setRedisEligible
-setDefaultDockerWebImage
+setDockerWebImage
+displayUseDefaultsMessage
 setMagentoEdition
-setMagentoEditionSuffix
+setDbPort
+setRedisPort
+setElasticsearchPort
+setDockerElasticsearchImage
 setSshKey
-setSshFilename
-setProjectParentDirectory
 setProjectDirectoryName
 setDomainName
 setUseSampleData
-setDockerWebImage
-setDockerDbImage
-setUseRedis
-setDockerRedisImage
+setIdeKey
 addDomainNameToHostsFile
 downloadMagentoFiles || handleError
 createAuthJson
-if [[ "$MINOR_VERSION" -ge 3 ]]; then
-  createDockerfile
-fi
 createDockerComposeFile
 createDockerContainers || handleError
 installMagento || handleError
+warmCaches
+replaceProductionWebImageWithDevelopmentWebImage
 handleSuccess
+displayAttribution
+exit
