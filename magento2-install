@@ -515,6 +515,7 @@ addDomainNameToHostsFile() {
 }
 
 downloadMagentoFiles() {
+    export COMPOSER_MEMORY_LIMIT=-1
     mkdir -p "$LOCATION"
     chown -R ${USER}:${GROUP} "$LOCATION"
     composer create-project --ignore-platform-reqs --repository=https://repo.magento.com/ magento/project-$EDITION-edition:$VERSION "$LOCATION"
@@ -576,6 +577,7 @@ EOT
           - php.xdebug.remote_enable=1
           - php.xdebug.idekey=${IDE_KEY}
           - PHP_DISMOD=ioncube
+          - COMPOSER_MEMORY_LIMIT=-1
         ports:
           - "${WEB_PORT}:443"
         links:
