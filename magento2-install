@@ -791,6 +791,14 @@ installMagento() {
 
     if [ $USE_ELASTICSEARCH == 1 ] && [ "$(versionCompare $VERSION \>= 2.2.0)" == 1 ]; then
         docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento config:set --lock-env catalog/search/engine ${MAGENTO_SEARCH_ENGINE_CONFIG_VALUE}"
+
+        if [ "$(versionCompare $VERSION \< 2.4.0)" == 1 ]; then
+            docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento config:set --lock-env catalog/search/${MAGENTO_SEARCH_ENGINE_CONFIG_VALUE}_server_port 9200"
+            docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento config:set --lock-env catalog/search/${MAGENTO_SEARCH_ENGINE_CONFIG_VALUE}_server_hostname elasticsearch"
+            docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento config:set --lock-env catalog/search/${MAGENTO_SEARCH_ENGINE_CONFIG_VALUE}_index_prefix magento2"
+            docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento config:set --lock-env catalog/search/${MAGENTO_SEARCH_ENGINE_CONFIG_VALUE}_enable_auth 0"
+        fi
+
         docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento app:config:import"
     fi
 }
