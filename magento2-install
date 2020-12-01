@@ -783,6 +783,7 @@ installMagento() {
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento setup:install $MAGENTO_INSTALL_ARGS"
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento deploy:mode:set developer"
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento cache:disable full_page block_html"
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento config:set --lock-env admin/security/session_lifetime 31536000"
 
     if [ "$(versionCompare $VERSION \>= 2.4.0)" == 1 ]; then
       docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento module:disable Magento_TwoFactorAuth"
