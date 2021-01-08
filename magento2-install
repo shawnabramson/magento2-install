@@ -18,7 +18,7 @@ DEFAULT_EDITION=ce
 DEFAULT_USE_SAMPLE_DATA=y
 DEFAULT_DOCKER_PRODUCTION_WEB_IMAGE=webdevops/php-apache
 DEFAULT_DOCKER_DEVELOPMENT_WEB_IMAGE=${DEFAULT_DOCKER_PRODUCTION_WEB_IMAGE}-dev
-DEFAULT_DOCKER_DB_IMAGE=mariadb:10
+DEFAULT_DOCKER_DB_IMAGE=mariadb:10.2
 DEFAULT_DOCKER_REDIS_IMAGE=redis:latest
 DEFAULT_ADMIN_USERNAME=admin
 DEFAULT_ADMIN_PASSWORD=abc12345
@@ -306,6 +306,14 @@ setDockerWebImage() {
     setPhpVersion
     DOCKER_PRODUCTION_WEB_IMAGE=$DEFAULT_DOCKER_PRODUCTION_WEB_IMAGE:$PHP_VERSION
     DOCKER_DEVELOPMENT_WEB_IMAGE=$DEFAULT_DOCKER_DEVELOPMENT_WEB_IMAGE:$PHP_VERSION
+}
+
+setDockerDbImage() {
+    if [ "$(versionCompare $VERSION \>= 2.4.0)" == 1 ]; then
+        DOCKER_DB_IMAGE=mariadb:10.4
+    else
+        DOCKER_DB_IMAGE=$DEFAULT_DOCKER_DB_IMAGE
+    fi
 }
 
 setDbPort() {
@@ -906,6 +914,7 @@ verifyPrerequisites
 forceSudoAuthentication
 setMagentoVersion
 setDockerWebImage
+setDockerDbImage
 displayUseDefaultsMessage
 setMagentoEdition
 setDbPort
