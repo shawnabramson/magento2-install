@@ -177,21 +177,21 @@ verifyPrerequisites() {
 
     local result=1
     if ! command -v composer &>/dev/null; then
-        printf "Composer is not installed on your system and is required to install Magento. Please install Composer and try again.\n"
+        printf "${ERROR}Composer is not installed on your system and is required to install Magento. Please install Composer and try again.\n"
         result=0
     else
         printf "${CHECKMARK}Composer\n"
     fi
 
     if ! command -v docker &>/dev/null; then
-        printf "Docker is not installed on your system and is required. Please install Docker and try again.\n"
+        printf "${ERROR}Docker is not installed on your system and is required. Please install Docker and try again.\n"
         result=0
     else
         printf "${CHECKMARK}Docker\n"
     fi
 
     if ! command -v docker-compose &>/dev/null; then
-        printf "Docker-compose is not installed on your system and is required. Please install Docker-compose and try again.\n"
+        printf "${ERROR}Docker-compose is not installed on your system and is required. Please install Docker-compose and try again.\n"
         result=0
     else
         printf "${CHECKMARK}Docker-compose\n"
@@ -527,10 +527,6 @@ downloadMagentoFiles() {
     mkdir -p "$LOCATION"
     chown -R ${USER}:${GROUP} "$LOCATION"
     composer create-project --ignore-platform-reqs --repository=https://repo.magento.com/ magento/project-$EDITION-edition:$VERSION "$LOCATION"
-    find $LOCATION -name '.htaccess' -exec sed -i '' s/756M/2048M/g {} + &&
-        find $LOCATION -name '.htaccess' -exec sed -i '' s/768M/2048M/g {} + &&
-        find $LOCATION -name '.user.ini' -exec sed -i '' s/756M/4096M/g {} + &&
-        find $LOCATION -name '.user.ini' -exec sed -i '' s/768M/4096M/g {} +
 }
 
 createDockerComposeFile() {
@@ -788,6 +784,10 @@ installMagento() {
     MAGENTO_INSTALL_ARGS=$(echo $MAGENTO_INSTALL_ARGS | xargs)
 
     waitForDbContainerToBeReady
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "find /app -name '.htaccess' -exec sed -i s/756M/2048M/g {} +"
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "find /app -name '.htaccess' -exec sed -i s/768M/2048M/g {} +"
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "find /app -name '.user.ini' -exec sed -i s/756M/4096M/g {} +"
+    docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "find /app -name '.user.ini' -exec sed -i s/768M/4096M/g {} +"
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento setup:install $MAGENTO_INSTALL_ARGS"
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento deploy:mode:set developer"
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento cache:disable full_page block_html"
