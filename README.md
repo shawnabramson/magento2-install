@@ -5,8 +5,7 @@ choice. It includes everything needed for custom development and extension devel
 # Installation
 1. Download the magento2-install file
 2. Move the file to /usr/local/bin/magento2-install `mv ./magento2-install /usr/local/bin`
-3. Open the file in the text editor of your choice `open -a TextEdit /usr/local/bin/magento2-install`
-4. Ensure the file is executable `chmod +x /usr/local/bin/magento2-install`
+3. Ensure the file is executable `chmod +x /usr/local/bin/magento2-install`
    
 # Usage
 1. Open a new terminal window
