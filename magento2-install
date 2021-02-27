@@ -725,7 +725,7 @@ createDockerContainers() {
     docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "cd /app && composer update"
 
     if [[ "$USE_SAMPLE_DATA" == 1 ]]; then
-        docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php /app/bin/magento sampledata:deploy"
+        docker exec $DOCKER_WEB_CONTAINER_NAME /bin/bash -c "php -dmemory_limit=4G /app/bin/magento sampledata:deploy"
     fi
 }
 
